@@ -1,0 +1,34 @@
+# Environment & secrets
+.env
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Abaqus runtime files
+*.rpy
+*.rpy.*
+*.odb
+*.odb_f
+*.lck
+*.log
+*.dat
+*.msg
+*.sta
+*.com
+*.prt
+*.sim
+*.ipm
+*.jnl
+
+# Project runtime directories
+scripts/
+results/
+output/
+logs/
