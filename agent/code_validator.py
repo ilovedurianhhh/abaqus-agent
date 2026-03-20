@@ -14,6 +14,7 @@ import inspect
 import importlib
 import functools
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +187,32 @@ def _extract_api_calls(code):
     return calls
 
 
+def _uses_native_abaqus_code(code):
+    """Detect whether the code uses native Abaqus commands (mdb.models[...]).
+
+    Returns True if native Abaqus scripting commands are found.
+    """
+    # Common patterns for native Abaqus Python scripting
+    native_patterns = [
+        r'mdb\.models\[',
+        r'mdb\.Model\(',
+        r'm\._buf\.emit\(',
+        r'session\.',
+        r'from abaqus import',
+        r'from abaqusConstants import',
+    ]
+    for pat in native_patterns:
+        if re.search(pat, code):
+            return True
+    return False
+
+
 def validate_api_calls(code):
     """Validate all API calls in generated code against real signatures.
+
+    When native Abaqus commands are detected (mdb.models[...], m._buf.emit),
+    only simplified-API calls are validated — native commands are passed
+    through with basic safety checks only.
 
     Args:
         code: Generated Python code string.
@@ -195,6 +220,7 @@ def validate_api_calls(code):
     Returns:
         List of error/warning strings. Empty list means code is valid.
     """
+    has_native = _uses_native_abaqus_code(code)
     signatures = _build_api_signatures()
     calls = _extract_api_calls(code)
     errors = []
@@ -206,6 +232,10 @@ def validate_api_calls(code):
         if key not in signatures:
             # Skip AbaqusModel constructor and known non-builder calls
             if method in ("AbaqusModel", "max_values", "field_output"):
+                continue
+            # When native Abaqus code is present, skip unknown method errors
+            # (the LLM may be using m._buf.emit or other hybrid patterns)
+            if has_native:
                 continue
             if builder in _BUILDER_MAP or builder == "model":
                 errors.append(

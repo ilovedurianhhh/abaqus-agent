@@ -111,6 +111,13 @@ CRITICAL — set type selection:
 - NEVER pass a face set name to pressure(); NEVER pass a surface name to fix()
 - This is the #1 most common error. Double-check every load/BC call.
 
+HYBRID API USAGE:
+- PREFER using the simplified API (m.part, m.load, m.mesh, etc.) whenever possible
+- If the simplified API does not have the needed function, use native Abaqus Python commands
+  from the "Abaqus Native API Reference" section below
+- When using native commands, wrap them with m._buf.emit("...") to add to the code buffer
+- NEVER mix: either use simplified API for a task, or use native commands, not both for the same operation
+
 OUTPUT FORMAT — you MUST respond with exactly this structure:
 <plan>
 Brief analysis plan (geometry, material, BCs, loads, mesh, analysis step type)
@@ -919,6 +926,127 @@ peeq_data = m.odb.field_output("FieldJob.odb", field_name="PEEQ",
     work_dir=result["output_dir"])
 </code>""",
     },
+
+    "hybrid_heat": {
+        "keywords": ["热传导", "温度", "导热", "稳态", "瞬态", "heat", "thermal", "温度场", "传热"],
+        "example": """\
+## Example: Steady-state heat transfer using HYBRID approach (simplified API + native commands)
+
+User: 一根200x20x20mm的钢杆，左端温度200度，右端25度，求稳态温度分布
+
+<plan>
+- 几何：200×20×20 mm 长方体（用简化API）
+- 材料：钢，导热系数 50 W/(m·K)（用原生API定义 Conductivity）
+- 分析步：HeatTransferStep, STEADY_STATE（原生API）
+- 边界条件：左端面 200°C, 右端面 25°C（原生API: TemperatureBC）
+- 网格：DC3D8 热传导单元（原生API设置单元类型）
+</plan>
+<code>
+from abaqus_api import AbaqusModel
+
+m = AbaqusModel("HeatBar")
+
+# Geometry — use simplified API
+m.part.create_sketch("bar_sketch", sheet_size=400.0)
+m.part.rectangle(p1=(0, 0), p2=(200.0, 20.0))
+m.part.extrude_solid("Bar", depth=20.0)
+
+# Face sets for temperature BCs
+m.part.create_face_set("Bar", "LeftFace",
+    xmin=-0.1, ymin=-0.1, zmin=-0.1, xmax=0.1, ymax=20.1, zmax=20.1)
+m.part.create_face_set("Bar", "RightFace",
+    xmin=199.9, ymin=-0.1, zmin=-0.1, xmax=200.1, ymax=20.1, zmax=20.1)
+
+# Material — simplified API for basic definition, native for conductivity
+m.material.create_elastic("Steel", E=210000.0, nu=0.3)
+m.material.create_solid_section("BarSec", material="Steel")
+m.material.assign_section("Bar", "BarSec")
+
+# Native: add thermal conductivity
+m._buf.emit("mdb.models['HeatBar'].materials['Steel'].Conductivity(table=((50.0, ), ))")
+
+# Assembly
+m.assembly.create_instance("Bar")
+
+# Native: create heat transfer step (not available in simplified API)
+m._buf.emit("mdb.models['HeatBar'].HeatTransferStep(name='HeatStep', previous='Initial', response=STEADY_STATE, maxNumInc=100, initialInc=1.0, minInc=1e-5, maxInc=1.0)")
+
+# Native: temperature boundary conditions
+m._buf.emit("region_left = mdb.models['HeatBar'].rootAssembly.instances['Bar-1'].sets['LeftFace']")
+m._buf.emit("mdb.models['HeatBar'].TemperatureBC(name='HotEnd', createStepName='HeatStep', region=region_left, magnitude=200.0)")
+m._buf.emit("region_right = mdb.models['HeatBar'].rootAssembly.instances['Bar-1'].sets['RightFace']")
+m._buf.emit("mdb.models['HeatBar'].TemperatureBC(name='ColdEnd', createStepName='HeatStep', region=region_right, magnitude=25.0)")
+
+# Mesh — use simplified API but override element type for thermal
+m.mesh.seed_part("Bar", size=5.0)
+m._buf.emit("elemType = mesh.ElemType(elemCode=DC3D8, elemLibrary=STANDARD)")
+m._buf.emit("cells = mdb.models['HeatBar'].parts['Bar'].cells[:]")
+m._buf.emit("mdb.models['HeatBar'].parts['Bar'].setElementType(regions=(cells, ), elemTypes=(elemType, ))")
+m.mesh.generate("Bar")
+
+# Submit and read results
+result = m.submit("HeatJob", wait=True)
+odb_summary = m.odb.max_values("HeatJob.odb", work_dir=result["output_dir"])
+</code>""",
+    },
+
+    "hybrid_buckling": {
+        "keywords": ["屈曲", "临界载荷", "失稳", "稳定性", "buckling"],
+        "example": """\
+## Example: Linear buckling analysis using HYBRID approach
+
+User: 一根细长钢柱500x10x10mm，底部固定，顶部受1MPa压力，求前3阶屈曲临界载荷
+
+<plan>
+- 几何：500×10×10 mm 细长柱（简化API）
+- 材料：钢 (E=210000, ν=0.3)
+- 分析步1：StaticStep 施加参考载荷（原生API）
+- 分析步2：BuckleStep 求特征值（原生API）
+- 边界条件：底面固定，顶面压力
+</plan>
+<code>
+from abaqus_api import AbaqusModel
+
+m = AbaqusModel("BucklingColumn")
+
+# Geometry — simplified API
+m.part.create_sketch("col_sketch", sheet_size=600.0)
+m.part.rectangle(p1=(0, 0), p2=(500.0, 10.0))
+m.part.extrude_solid("Column", depth=10.0)
+
+# Sets
+m.part.create_face_set("Column", "BottomFace",
+    xmin=-0.1, ymin=-0.1, zmin=-0.1, xmax=500.1, ymax=0.1, zmax=10.1)
+m.part.create_surface("Column", "TopSurf",
+    xmin=-0.1, ymin=9.9, zmin=-0.1, xmax=500.1, ymax=10.1, zmax=10.1)
+
+# Material
+m.material.create_elastic("Steel", E=210000.0, nu=0.3)
+m.material.create_solid_section("ColSec", material="Steel")
+m.material.assign_section("Column", "ColSec")
+
+# Assembly
+m.assembly.create_instance("Column")
+
+# Native: Static preload step + Buckling step
+m._buf.emit("mdb.models['BucklingColumn'].StaticStep(name='Preload', previous='Initial')")
+m._buf.emit("mdb.models['BucklingColumn'].BuckleStep(name='Buckle', previous='Preload', numEigen=3, maxIterations=30)")
+
+# BCs and loads — simplified API for fixed BC, native for pressure in preload step
+m.load.fix("FixBottom", instance="Column-1", set_name="BottomFace")
+m._buf.emit("region_top = mdb.models['BucklingColumn'].rootAssembly.instances['Column-1'].surfaces['TopSurf']")
+m._buf.emit("mdb.models['BucklingColumn'].Pressure(name='AxialLoad', createStepName='Preload', region=region_top, magnitude=1.0)")
+
+# Mesh
+m.mesh.seed_part("Column", size=5.0)
+m.mesh.set_element_type("Column", "C3D8R")
+m.mesh.generate("Column")
+
+# Submit
+result = m.submit("BuckleJob", wait=True)
+odb_summary = m.odb.max_values("BuckleJob.odb", work_dir=result["output_dir"])
+</code>""",
+    },
 }
 
 
@@ -945,6 +1073,8 @@ _CLASSIFY_SYSTEM = """\
 - assembly: 多零件/装配/组装/连接/叠放/接触/两个零件。适用于：包含多个独立零件的分析
 - mesh_control: 网格细化/局部加密/应力集中区域网格/种子控制/二次单元。适用于：需要局部精细网格
 - field_output: 自定义场输出/PEEQ/塑性应变输出/特定场变量读取。适用于：需要输出非默认的场变量
+- hybrid_heat: 热传导/温度场/稳态传热/瞬态传热/导热/对流换热。适用于：热分析（需要HeatTransferStep）
+- hybrid_buckling: 屈曲/失稳/临界载荷/稳定性。适用于：线性特征值屈曲分析（需要BuckleStep）
 
 ## 分类示例
 
@@ -1014,8 +1144,8 @@ def _select_by_keywords(user_input, top_k=2):
 def select_examples(user_input, top_k=2, llm_client=None):
     """Select the most relevant few-shot examples.
 
-    Uses LLM classification when llm_client is provided, falls back to
-    keyword matching otherwise.
+    Strategy: keyword matching first (fast, free). Only falls back to
+    LLM classification when keywords score 0 and llm_client is available.
 
     Args:
         user_input: The user's natural language input.
@@ -1028,34 +1158,53 @@ def select_examples(user_input, top_k=2, llm_client=None):
     if not user_input:
         return [EXAMPLES["static_pressure"]["example"]]
 
-    keys = []
+    # Try keyword matching first (fast, no API call)
+    keys = _select_by_keywords(user_input, top_k)
 
-    # Try LLM classification first
-    if llm_client is not None:
-        keys = _classify_by_llm(user_input, llm_client)
-
-    # Fallback to keyword matching
-    if not keys:
-        keys = _select_by_keywords(user_input, top_k)
-        logger.info("Keyword fallback: input='%s' → %s", user_input[:50], keys)
+    # Only use LLM classification if keywords found nothing useful
+    if keys == ["static_pressure"] and llm_client is not None:
+        llm_keys = _classify_by_llm(user_input, llm_client)
+        if llm_keys:
+            keys = llm_keys
+            logger.info("LLM classification override: %s", keys)
 
     return [EXAMPLES[k]["example"] for k in keys[:top_k]]
 
 
-def build_system_prompt(user_input="", llm_client=None):
+def build_system_prompt(user_input="", llm_client=None, rag=None):
     """Build the complete system prompt with role, API reference, and examples.
 
     Args:
         user_input: The user's message, used to select relevant few-shot examples.
         llm_client: Optional LLMClient for LLM-based example classification.
+        rag: Optional AbaqusRAG instance for native API documentation retrieval.
     """
     api_ref = build_api_reference()
     examples = select_examples(user_input, llm_client=llm_client)
     examples_text = "\n\n".join(examples)
+
+    # RAG retrieval for native Abaqus API documentation
+    rag_context = ""
+    if rag and user_input:
+        try:
+            rag_results = rag.retrieve(user_input, top_k=5)
+            if rag_results:
+                rag_context = "\n\n# Abaqus Native API Reference (from documentation)\n"
+                rag_context += (
+                    "When the simplified API above does not cover the needed functionality, "
+                    "you may use these native Abaqus Python commands directly.\n"
+                    "Wrap each native command with m._buf.emit(\"...\") to add it to the code buffer.\n\n"
+                )
+                for doc in rag_results:
+                    rag_context += f"## {doc['title']}\n{doc['content']}\n\n"
+        except Exception as e:
+            logger.warning("RAG retrieval failed: %s", e)
+
     return f"""{ROLE_PROMPT}
 
-# API Reference
+# Simplified API Reference (preferred)
 {api_ref}
 
 # Few-shot Examples
-{examples_text}"""
+{examples_text}
+{rag_context}"""

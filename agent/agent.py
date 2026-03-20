@@ -101,14 +101,36 @@ def _validate_code(code):
 def _parse_response(text):
     """Extract <plan> and <code> blocks from LLM response.
 
+    Supports multiple code formats:
+        1. <code>...</code>  (preferred)
+        2. ```python...```   (common LLM fallback)
+        3. ```...```         (generic code block)
+
     Returns:
         (plan_text, code_text) — either may be empty string if not found.
     """
     plan_match = re.search(r"<plan>(.*?)</plan>", text, re.DOTALL)
-    code_match = re.search(r"<code>(.*?)</code>", text, re.DOTALL)
     plan = plan_match.group(1).strip() if plan_match else ""
-    code = code_match.group(1).strip() if code_match else ""
-    return plan, code
+
+    # Try <code> tags first (preferred format)
+    code_match = re.search(r"<code>(.*?)</code>", text, re.DOTALL)
+    if code_match:
+        return plan, code_match.group(1).strip()
+
+    # Fallback: ```python ... ```
+    code_match = re.search(r"```python\s*\n(.*?)```", text, re.DOTALL)
+    if code_match:
+        return plan, code_match.group(1).strip()
+
+    # Fallback: generic ``` ... ```
+    code_match = re.search(r"```\s*\n(.*?)```", text, re.DOTALL)
+    if code_match:
+        code = code_match.group(1).strip()
+        # Only accept if it looks like Python code
+        if "import" in code or "AbaqusModel" in code or "m._buf" in code or "mdb.models" in code:
+            return plan, code
+
+    return plan, ""
 
 
 def _format_result(plan, odb_summary, output_dir):
@@ -138,6 +160,21 @@ class AbaqusAgent:
     def __init__(self, api_key=None, model="kimi-k2.5"):
         self.llm = LLMClient(api_key=api_key, model=model)
         self.history = ConversationHistory()
+
+        # Initialize RAG if index exists (graceful degradation)
+        self.rag = None
+        try:
+            from .rag import AbaqusRAG
+            rag = AbaqusRAG()
+            if rag.is_indexed():
+                self.rag = rag
+                logger.info("RAG enabled with %d documents", rag.count())
+            else:
+                logger.info("RAG index is empty — running without RAG")
+        except ImportError:
+            logger.info("chromadb not installed — running without RAG")
+        except Exception as e:
+            logger.warning("RAG initialization failed: %s", e)
 
     def chat(self, user_message):
         """Process a user message and return the analysis result or response.
@@ -169,7 +206,7 @@ class AbaqusAgent:
             # Build system prompt dynamically based on user input
             # Pass llm client for LLM-based example classification
             system_prompt = build_system_prompt(
-                user_input=user_message, llm_client=self.llm
+                user_input=user_message, llm_client=self.llm, rag=self.rag
             )
 
             # Call LLM

@@ -1,0 +1,104 @@
+[
+  {
+    "title": "Surface-to-Surface Contact (Standard)",
+    "category": "interaction",
+    "content": "接触分析 摩擦 接触对 面面接触 主从面 Contact Friction\nCreate contact interaction between two surfaces in Abaqus/Standard.\n\n1. Create interaction property with friction:\nmdb.models['Model'].ContactProperty('IntProp')\nmdb.models['Model'].interactionProperties['IntProp'].TangentialBehavior(formulation=PENALTY, fraction=0.005, table=((0.3, ), ))\nmdb.models['Model'].interactionProperties['IntProp'].NormalBehavior(pressureOverclosure=HARD, allowSeparation=ON)\n\n2. Create surface-to-surface contact:\nmdb.models['Model'].SurfaceToSurfaceContactStd(\n    name='Contact-1',\n    createStepName='Step-1',\n    master=mdb.models['Model'].rootAssembly.instances['Part-1'].surfaces['MasterSurf'],\n    slave=mdb.models['Model'].rootAssembly.instances['Part-2'].surfaces['SlaveSurf'],\n    sliding=FINITE,\n    interactionProperty='IntProp'\n)",
+    "example": "# Create contact property with friction coefficient 0.3\nmdb.models['Model'].ContactProperty('IntProp')\nmdb.models['Model'].interactionProperties['IntProp'].TangentialBehavior(\n    formulation=PENALTY, fraction=0.005, table=((0.3, ), ))\nmdb.models['Model'].interactionProperties['IntProp'].NormalBehavior(\n    pressureOverclosure=HARD, allowSeparation=ON)\n\n# Create contact pair\nmdb.models['Model'].SurfaceToSurfaceContactStd(\n    name='Contact-1', createStepName='Step-1',\n    master=mdb.models['Model'].rootAssembly.instances['Block-1'].surfaces['BottomSurf'],\n    slave=mdb.models['Model'].rootAssembly.instances['Base-1'].surfaces['TopSurf'],\n    sliding=FINITE, interactionProperty='IntProp')"
+  },
+  {
+    "title": "Tie Constraint",
+    "category": "constraint",
+    "content": "绑定约束 Tie 绑定 连接面 固连\nCreate a tie constraint to bond two surfaces together (no relative motion).\n\nmdb.models['Model'].Tie(\n    name='Tie-1',\n    master=mdb.models['Model'].rootAssembly.instances['Part-1'].surfaces['MasterSurf'],\n    slave=mdb.models['Model'].rootAssembly.instances['Part-2'].surfaces['SlaveSurf'],\n    positionToleranceMethod=COMPUTED,\n    adjust=ON,\n    tieRotations=ON\n)\n\nNote: The master surface should be the stiffer/coarser-meshed surface.",
+    "example": "# Tie two parts together\nmdb.models['Model'].Tie(\n    name='Tie-1',\n    master=mdb.models['Model'].rootAssembly.instances['Flange-1'].surfaces['TopSurf'],\n    slave=mdb.models['Model'].rootAssembly.instances['Plate-1'].surfaces['BotSurf'],\n    positionToleranceMethod=COMPUTED, adjust=ON, tieRotations=ON)"
+  },
+  {
+    "title": "Heat Transfer Analysis (Steady-State)",
+    "category": "thermal",
+    "content": "热传导 稳态传热 温度场 导热系数 对流换热 热分析\nSteady-state heat transfer analysis setup.\n\n1. Create heat transfer step:\nmdb.models['Model'].HeatTransferStep(\n    name='HeatStep',\n    previous='Initial',\n    response=STEADY_STATE,\n    maxNumInc=100,\n    initialInc=1.0,\n    minInc=1e-5,\n    maxInc=1.0\n)\n\n2. Define thermal conductivity:\nmdb.models['Model'].materials['Steel'].Conductivity(table=((50.0, ), ))\n\n3. Apply temperature BC:\nmdb.models['Model'].TemperatureBC(\n    name='HotEnd',\n    createStepName='HeatStep',\n    region=mdb.models['Model'].rootAssembly.instances['Part-1'].sets['HotFace'],\n    magnitude=100.0\n)\n\n4. Apply convection (surface film condition):\nmdb.models['Model'].FilmCondition(\n    name='Convection',\n    createStepName='HeatStep',\n    surface=mdb.models['Model'].rootAssembly.instances['Part-1'].surfaces['OuterSurf'],\n    filmCoeff=10.0,\n    sinkTemperature=25.0\n)\n\n5. Use DC3D8 elements for 3D heat transfer:\nmdb.models['Model'].parts['Part'].setElementType(\n    elemTypes=(ElemType(elemCode=DC3D8, elemLibrary=STANDARD), ),\n    regions=(cells, )\n)",
+    "example": "# Steady-state heat transfer\nmdb.models['Model'].HeatTransferStep(name='HeatStep', previous='Initial',\n    response=STEADY_STATE)\nmdb.models['Model'].materials['Steel'].Conductivity(table=((50.0, ), ))\nmdb.models['Model'].TemperatureBC(name='HotEnd', createStepName='HeatStep',\n    region=mdb.models['Model'].rootAssembly.instances['Bar-1'].sets['LeftFace'],\n    magnitude=200.0)\nmdb.models['Model'].TemperatureBC(name='ColdEnd', createStepName='HeatStep',\n    region=mdb.models['Model'].rootAssembly.instances['Bar-1'].sets['RightFace'],\n    magnitude=25.0)"
+  },
+  {
+    "title": "Heat Transfer Analysis (Transient)",
+    "category": "thermal",
+    "content": "瞬态传热 瞬态热分析 比热容 时间相关热载荷\nTransient heat transfer analysis with time-dependent thermal loading.\n\n1. Create transient heat transfer step:\nmdb.models['Model'].HeatTransferStep(\n    name='TransientHeat',\n    previous='Initial',\n    response=TRANSIENT,\n    timePeriod=100.0,\n    maxNumInc=1000,\n    initialInc=0.1,\n    minInc=1e-6,\n    maxInc=10.0\n)\n\n2. Define specific heat (required for transient):\nmdb.models['Model'].materials['Steel'].SpecificHeat(table=((480.0, ), ))\nmdb.models['Model'].materials['Steel'].Density(table=((7.85e-9, ), ))\nmdb.models['Model'].materials['Steel'].Conductivity(table=((50.0, ), ))",
+    "example": "# Transient heat transfer\nmdb.models['Model'].HeatTransferStep(name='TransientHeat', previous='Initial',\n    response=TRANSIENT, timePeriod=100.0, initialInc=0.1, maxInc=10.0)\nmdb.models['Model'].materials['Steel'].SpecificHeat(table=((480.0, ), ))\nmdb.models['Model'].materials['Steel'].Density(table=((7.85e-9, ), ))\nmdb.models['Model'].materials['Steel'].Conductivity(table=((50.0, ), ))"
+  },
+  {
+    "title": "Buckling Analysis (Linear Eigenvalue)",
+    "category": "buckling",
+    "content": "屈曲分析 稳定性 临界载荷 特征值屈曲 失稳\nLinear eigenvalue buckling analysis to find critical buckling loads.\n\n1. Create static step with preload:\nmdb.models['Model'].StaticStep(name='Preload', previous='Initial')\n\n2. Create buckling step:\nmdb.models['Model'].BuckleStep(\n    name='Buckle',\n    previous='Preload',\n    numEigen=5,\n    maxIterations=30\n)\n\n3. Apply reference load in preload step, buckling analysis finds load multipliers.\n\nNote: The eigenvalues represent load multipliers. Critical buckling load = eigenvalue x applied load.",
+    "example": "# Linear buckling analysis\nmdb.models['Model'].StaticStep(name='Preload', previous='Initial')\nmdb.models['Model'].BuckleStep(name='Buckle', previous='Preload', numEigen=5)\n# Apply unit load in Preload step\n# Eigenvalues give critical load multipliers"
+  },
+  {
+    "title": "General Contact (Abaqus/Explicit)",
+    "category": "interaction",
+    "content": "通用接触 显式接触 自接触 全局接触 碰撞\nDefine general contact for Abaqus/Explicit analysis (all-with-self).\n\nmdb.models['Model'].ContactExp(\n    name='GeneralContact',\n    createStepName='Step-1'\n)\nmdb.models['Model'].interactions['GeneralContact'].includedPairs.setValuesInStep(\n    stepName='Step-1',\n    useAllstar=ON\n)\n\n# Set contact properties\nmdb.models['Model'].ContactProperty('ExpProp')\nmdb.models['Model'].interactionProperties['ExpProp'].TangentialBehavior(\n    formulation=PENALTY, table=((0.3, ), ))\nmdb.models['Model'].interactionProperties['ExpProp'].NormalBehavior(\n    pressureOverclosure=HARD, allowSeparation=ON)\nmdb.models['Model'].interactions['GeneralContact'].contactPropertyAssignments.appendInStep(\n    stepName='Step-1',\n    assignments=((GLOBAL, SELF, 'ExpProp'), )\n)",
+    "example": "# General contact in explicit analysis\nmdb.models['Model'].ContactExp(name='GC', createStepName='Impact')\nmdb.models['Model'].interactions['GC'].includedPairs.setValuesInStep(\n    stepName='Impact', useAllstar=ON)\nmdb.models['Model'].ContactProperty('ExpProp')\nmdb.models['Model'].interactionProperties['ExpProp'].TangentialBehavior(\n    formulation=PENALTY, table=((0.2, ), ))\nmdb.models['Model'].interactionProperties['ExpProp'].NormalBehavior(\n    pressureOverclosure=HARD)\nmdb.models['Model'].interactions['GC'].contactPropertyAssignments.appendInStep(\n    stepName='Impact', assignments=((GLOBAL, SELF, 'ExpProp'), ))"
+  },
+  {
+    "title": "Coupling Constraint",
+    "category": "constraint",
+    "content": "耦合约束 分布耦合 参考点 运动耦合 刚性耦合\nCreate a coupling constraint to distribute loads from a reference point to a surface.\n\n1. Create reference point:\nmdb.models['Model'].rootAssembly.ReferencePoint(point=(x, y, z))\n\n2. Create coupling:\nmdb.models['Model'].Coupling(\n    name='Coupling-1',\n    controlPoint=mdb.models['Model'].rootAssembly.sets['RefPoint'],\n    surface=mdb.models['Model'].rootAssembly.instances['Part-1'].surfaces['CoupledSurf'],\n    influenceRadius=WHOLE_SURFACE,\n    couplingType=DISTRIBUTING,\n    localCsys=None,\n    u1=ON, u2=ON, u3=ON, ur1=ON, ur2=ON, ur3=ON\n)",
+    "example": "# Create reference point and coupling\nrp = mdb.models['Model'].rootAssembly.ReferencePoint(point=(100.0, 50.0, 0.0))\nrp_region = mdb.models['Model'].rootAssembly.Set(name='RefPoint',\n    referencePoints=(mdb.models['Model'].rootAssembly.referencePoints[rp.id], ))\nmdb.models['Model'].Coupling(name='Coupling-1',\n    controlPoint=rp_region,\n    surface=mdb.models['Model'].rootAssembly.instances['Beam-1'].surfaces['EndSurf'],\n    influenceRadius=WHOLE_SURFACE, couplingType=DISTRIBUTING)"
+  },
+  {
+    "title": "MPC Constraint (Multi-Point Constraint)",
+    "category": "constraint",
+    "content": "多点约束 MPC 刚性连接 铰接\nCreate MPC constraint (Beam or Pin type) between surfaces.\n\nmdb.models['Model'].MultipointConstraint(\n    name='MPC-1',\n    controlPoint=mdb.models['Model'].rootAssembly.sets['RefPoint'],\n    surface=mdb.models['Model'].rootAssembly.instances['Part-1'].surfaces['Surf'],\n    mpcType=BEAM_MPC  # or PIN_MPC\n)",
+    "example": "# Beam MPC constraint\nmdb.models['Model'].MultipointConstraint(name='MPC-1',\n    controlPoint=rp_region,\n    surface=mdb.models['Model'].rootAssembly.instances['Beam-1'].surfaces['EndSurf'],\n    mpcType=BEAM_MPC)"
+  },
+  {
+    "title": "Bolt Load (Pre-tension)",
+    "category": "load",
+    "content": "螺栓预紧力 螺栓载荷 预紧 Bolt\nApply bolt pre-tension load.\n\n1. Create a datum plane to cut the bolt (for pre-tension section).\n2. Partition the bolt part at the datum plane.\n3. Create bolt load:\nmdb.models['Model'].BoltLoad(\n    name='Bolt-1',\n    createStepName='Step-1',\n    region=mdb.models['Model'].rootAssembly.instances['Bolt-1'].surfaces['BoltCut'],\n    magnitude=25000.0,\n    boltMethod=APPLY_FORCE\n)",
+    "example": "# Apply bolt pretension\nmdb.models['Model'].BoltLoad(name='Bolt-1', createStepName='Pretension',\n    region=mdb.models['Model'].rootAssembly.instances['Bolt-1'].surfaces['CutSection'],\n    magnitude=25000.0, boltMethod=APPLY_FORCE)"
+  },
+  {
+    "title": "Spring/Dashpot Element",
+    "category": "interaction",
+    "content": "弹簧单元 阻尼器 弹簧刚度 弹簧连接\nCreate spring elements between nodes or between a node and ground.\n\nmdb.models['Model'].rootAssembly.engineeringFeatures.SpringDashpotToGround(\n    name='Spring-1',\n    region=mdb.models['Model'].rootAssembly.instances['Part-1'].sets['SpringNode'],\n    orientation=None,\n    dof=2,\n    springBehavior=ON,\n    springStiffness=1000.0,\n    dashpotBehavior=OFF\n)\n\nFor spring between two nodes:\nmdb.models['Model'].rootAssembly.engineeringFeatures.TwoPointSpringDashpot(\n    name='Spring-2',\n    regionPairs=((region1, region2), ),\n    axis=FIXED_DOF,\n    dof1=1, dof2=1,\n    springBehavior=ON, springStiffness=500.0\n)",
+    "example": "# Ground spring in Y direction (dof=2)\nmdb.models['Model'].rootAssembly.engineeringFeatures.SpringDashpotToGround(\n    name='Spring-1',\n    region=mdb.models['Model'].rootAssembly.instances['Mass-1'].sets['CenterNode'],\n    dof=2, springBehavior=ON, springStiffness=1000.0, dashpotBehavior=OFF)"
+  },
+  {
+    "title": "Rigid Body Constraint",
+    "category": "constraint",
+    "content": "刚体约束 刚体 参考点控制\nCreate a rigid body constraint to make a region rigid, controlled by a reference point.\n\n1. Create reference point on the assembly.\n2. Define rigid body:\nmdb.models['Model'].RigidBody(\n    name='Rigid-1',\n    refPointRegion=mdb.models['Model'].rootAssembly.sets['RefPoint'],\n    bodyRegion=mdb.models['Model'].rootAssembly.instances['Part-1'].sets['RigidRegion']\n)",
+    "example": "# Rigid body constraint\nrp = mdb.models['Model'].rootAssembly.ReferencePoint(point=(50.0, 0.0, 0.0))\nrp_set = mdb.models['Model'].rootAssembly.Set(name='RP',\n    referencePoints=(mdb.models['Model'].rootAssembly.referencePoints[rp.id], ))\nmdb.models['Model'].RigidBody(name='Rigid-1', refPointRegion=rp_set,\n    bodyRegion=mdb.models['Model'].rootAssembly.instances['Hammer-1'].sets['All'])"
+  },
+  {
+    "title": "Amplitude Definition",
+    "category": "load",
+    "content": "幅值 时间曲线 载荷随时间变化 脉冲载荷 加载历程\nDefine time-varying amplitude for loads or BCs.\n\nmdb.models['Model'].TabularAmplitude(\n    name='Amp-1',\n    timeSpan=STEP,\n    smooth=SOLVER_DEFAULT,\n    data=((0.0, 0.0), (0.5, 1.0), (1.0, 1.0))\n)\n\nApply amplitude to a load:\nmdb.models['Model'].ConcentratedForce(\n    name='Load-1', createStepName='Step-1',\n    region=..., cf2=-1000.0,\n    amplitude='Amp-1'\n)",
+    "example": "# Ramp amplitude: 0->1 over half the step, then hold\nmdb.models['Model'].TabularAmplitude(name='Ramp',\n    timeSpan=STEP, data=((0.0, 0.0), (0.5, 1.0), (1.0, 1.0)))\n# Apply to a pressure load\nmdb.models['Model'].Pressure(name='Pulse', createStepName='Impact',\n    region=surf_region, magnitude=50.0, amplitude='Ramp')"
+  },
+  {
+    "title": "Thermal-Mechanical Coupled Analysis",
+    "category": "thermal",
+    "content": "热力耦合 温度位移耦合 热膨胀 热应力\nCoupled temperature-displacement analysis.\n\n1. Create coupled step:\nmdb.models['Model'].CoupledTempDisplacementStep(\n    name='CoupledStep',\n    previous='Initial',\n    response=TRANSIENT,\n    timePeriod=10.0,\n    maxNumInc=100,\n    initialInc=0.1,\n    minInc=1e-5,\n    maxInc=1.0,\n    deltmx=10.0\n)\n\n2. Define thermal expansion:\nmdb.models['Model'].materials['Steel'].Expansion(table=((1.2e-5, ), ))\n\n3. Use C3D8T elements (coupled temp-displacement):\nmdb.models['Model'].parts['Part'].setElementType(\n    elemTypes=(ElemType(elemCode=C3D8T, elemLibrary=STANDARD), ),\n    regions=(cells, )\n)",
+    "example": "# Coupled thermal-mechanical step\nmdb.models['Model'].CoupledTempDisplacementStep(\n    name='CoupledStep', previous='Initial', response=TRANSIENT,\n    timePeriod=10.0, initialInc=0.1, deltmx=10.0)\nmdb.models['Model'].materials['Steel'].Expansion(table=((1.2e-5, ), ))"
+  },
+  {
+    "title": "Predefined Temperature Field",
+    "category": "load",
+    "content": "预定义温度场 温度载荷 初始温度 热应力分析\nApply predefined temperature field (for thermal stress analysis without coupled analysis).\n\nmdb.models['Model'].Temperature(\n    name='TempField',\n    createStepName='Step-1',\n    region=mdb.models['Model'].rootAssembly.instances['Part-1'].sets['All'],\n    magnitudes=(100.0, )\n)\n\nFor initial temperature:\nmdb.models['Model'].Temperature(\n    name='InitialTemp',\n    createStepName='Initial',\n    region=mdb.models['Model'].rootAssembly.instances['Part-1'].sets['All'],\n    magnitudes=(25.0, )\n)",
+    "example": "# Set initial temperature = 25C, then heat to 100C in Step-1\nmdb.models['Model'].Temperature(name='InitTemp', createStepName='Initial',\n    region=all_set, magnitudes=(25.0, ))\nmdb.models['Model'].Temperature(name='HeatUp', createStepName='Step-1',\n    region=all_set, magnitudes=(100.0, ))\n# Need thermal expansion coefficient defined in material"
+  },
+  {
+    "title": "Connector Section (Beam, Hinge, etc.)",
+    "category": "interaction",
+    "content": "连接器 铰接 梁连接 连接单元\nCreate connector elements between parts (e.g., beam connector, hinge, etc.).\n\n1. Create connector section:\nmdb.models['Model'].ConnectorSection(\n    name='BeamConn',\n    assembledType=BEAM\n)\n\n2. Create wire feature and assign connector:\nmdb.models['Model'].rootAssembly.WirePolyLine(\n    points=((pointA, pointB), ),\n    mergeType=IMPRINT,\n    meshable=OFF\n)\nmdb.models['Model'].rootAssembly.SectionAssignment(\n    sectionName='BeamConn',\n    region=wireRegion\n)",
+    "example": "# Create beam connector between two parts\nmdb.models['Model'].ConnectorSection(name='BeamConn', assembledType=BEAM)\n# Create wire and assign connector section"
+  },
+  {
+    "title": "Submodeling",
+    "category": "analysis",
+    "content": "子模型 局部细化分析 子模型边界条件 全局驱动\nSubmodeling technique: use global model results as boundary conditions for a local refined model.\n\n1. Create submodel boundary condition:\nmdb.models['SubModel'].SubmodelBC(\n    name='Submodel-BC',\n    createStepName='Step-1',\n    region=mdb.models['SubModel'].rootAssembly.instances['Local-1'].sets['BoundaryFaces'],\n    dof=(1, 2, 3),\n    globalStep='Step-1',\n    globalDrivingRegion='',\n    absoluteExteriorTolerance=0.0,\n    exteriorTolerance=0.05,\n    globalIncrement=0\n)\n\n2. Specify global model ODB:\nmdb.models['SubModel'].setValues(globalJob='GlobalJobName')",
+    "example": "# Submodel driven by global model results\nmdb.models['SubModel'].setValues(globalJob='GlobalJob')\nmdb.models['SubModel'].SubmodelBC(name='SubBC', createStepName='Step-1',\n    region=boundary_set, dof=(1, 2, 3), globalStep='Step-1')"
+  },
+  {
+    "title": "Cohesive Zone / Cohesive Elements",
+    "category": "interaction",
+    "content": "内聚力单元 粘聚区 分层 界面失效 脱粘\nCohesive zone modeling for delamination or interface failure.\n\n1. Define cohesive material:\nmdb.models['Model'].materials['Cohesive'].MaxsDamageInitiation(\n    table=((50.0, 50.0, 50.0), ))\nmdb.models['Model'].materials['Cohesive'].maxsDamageInitiation.DamageEvolution(\n    type=ENERGY, table=((1.0, ), ))\nmdb.models['Model'].materials['Cohesive'].Elastic(\n    type=TRACTION, table=((1e6, 1e6, 1e6), ))\n\n2. Create cohesive section:\nmdb.models['Model'].CohesiveSection(\n    name='CohSec',\n    material='Cohesive',\n    response=TRACTION_SEPARATION,\n    outOfPlaneThickness=None\n)",
+    "example": "# Cohesive zone material and section\nmdb.models['Model'].materials['Cohesive'].Elastic(\n    type=TRACTION, table=((1e6, 1e6, 1e6), ))\nmdb.models['Model'].materials['Cohesive'].MaxsDamageInitiation(\n    table=((50.0, 50.0, 50.0), ))\nmdb.models['Model'].materials['Cohesive'].maxsDamageInitiation.DamageEvolution(\n    type=ENERGY, table=((1.0, ), ))\nmdb.models['Model'].CohesiveSection(name='CohSec', material='Cohesive',\n    response=TRACTION_SEPARATION)"
+  }
+]
