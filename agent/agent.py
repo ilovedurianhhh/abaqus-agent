@@ -154,17 +154,103 @@ def _format_result(plan, odb_summary, output_dir):
     return "\n".join(lines)
 
 
+class TaskRouter:
+    """Embedding-based router that decides pipeline vs agent mode.
+
+    Pre-computes embeddings for "complex task" reference descriptions (things
+    that need native Abaqus API). If a user query is semantically close to
+    any reference → agent mode. Otherwise → pipeline.
+
+    Single-threshold design: avoids the ambiguity of comparing two overlapping
+    reference sets.
+    """
+
+    # Reference descriptions for tasks that NEED native Abaqus API
+    _COMPLEX_REFS = [
+        "接触分析 摩擦 两个零件之间的面面接触 surface to surface contact friction",
+        "热传导分析 温度场 稳态传热 heat transfer thermal conductivity temperature",
+        "屈曲分析 临界载荷 失稳 buckling critical load stability",
+        "螺栓预紧力 bolt pretension load tightening",
+        "弹簧单元 阻尼器 spring dashpot element",
+        "刚体约束 rigid body constraint",
+        "耦合约束 分布耦合 coupling distributing constraint",
+        "多点约束 MPC multi-point constraint",
+        "热力耦合 温度位移耦合 thermal mechanical coupled",
+        "内聚力单元 分层 脱粘 cohesive delamination",
+        "子模型 submodel global local",
+        "连接器 铰接 connector hinge",
+        "热膨胀 热应力 thermal expansion stress",
+        "绑定约束 两个零件贴合 tie constraint bond",
+        "幅值 载荷随时间变化 amplitude time varying",
+        "通用接触 碰撞 general contact collision",
+        "温度边界条件 对流换热 convection film condition",
+        "压杆稳定性 细长柱被压弯 column buckling stability slender",
+        "摩擦系数 法向接触 tangential friction penalty",
+        "齿轮啮合 传动 gear mesh engagement contact",
+    ]
+
+    # If embedding distance < this → definitely AGENT
+    _THRESHOLD_STRONG = 0.71
+    # If embedding distance < this AND keyword matches → also AGENT
+    _THRESHOLD_WEAK = 0.90
+
+    # Fallback keywords for when embedding is uncertain
+    _NATIVE_KEYWORDS = {
+        "接触", "摩擦", "热传导", "温度场", "导热", "传热", "屈曲", "失稳",
+        "临界载荷", "螺栓", "预紧", "弹簧单元", "阻尼器", "刚体约束",
+        "耦合约束", "多点约束", "MPC", "内聚力", "分层", "脱粘", "子模型",
+        "连接器", "热膨胀", "热力耦合", "热应力", "绑定约束", "贴合",
+        "碰撞", "啮合", "压弯", "压杆", "贴在一起", "温度",
+        "cohesive", "contact", "buckling", "heat transfer", "tie",
+    }
+
+    def __init__(self, embedding_fn):
+        """Pre-compute reference embeddings.
+
+        Args:
+            embedding_fn: A callable that takes a list of strings and returns
+                a list of embedding vectors (list of floats).
+        """
+        self._embed = embedding_fn
+        self._complex_vecs = self._embed(self._COMPLEX_REFS)
+        logger.info("TaskRouter initialized: %d complex refs", len(self._complex_vecs))
+
+    def is_complex(self, user_input):
+        """Return True if the task should go to agent mode.
+
+        Two-tier decision:
+        1. Embedding distance < strong threshold → AGENT (confident)
+        2. Embedding distance < weak threshold AND keyword match → AGENT
+        3. Otherwise → PIPELINE
+        """
+        query_vec = self._embed([user_input])[0]
+        min_dist = min(self._l2(query_vec, v) for v in self._complex_vecs)
+
+        # Tier 1: strong embedding match
+        if min_dist < self._THRESHOLD_STRONG:
+            logger.info("TaskRouter: dist=%.3f < %.2f → AGENT (embedding)",
+                         min_dist, self._THRESHOLD_STRONG)
+            return True
+
+        # Tier 2: weaker embedding + keyword confirmation
+        has_keyword = any(kw in user_input.lower() for kw in self._NATIVE_KEYWORDS)
+        if min_dist < self._THRESHOLD_WEAK and has_keyword:
+            logger.info("TaskRouter: dist=%.3f < %.2f + keyword → AGENT (hybrid)",
+                         min_dist, self._THRESHOLD_WEAK)
+            return True
+
+        logger.info("TaskRouter: dist=%.3f, keyword=%s → PIPELINE",
+                     min_dist, has_keyword)
+        return False
+
+    @staticmethod
+    def _l2(a, b):
+        """L2 distance between two vectors."""
+        return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
+
+
 class AbaqusAgent:
     """Agent that takes natural language input and runs Abaqus analyses."""
-
-    # Keywords that indicate the task needs native Abaqus API (not covered by simplified API)
-    _NATIVE_KEYWORDS = {
-        "接触", "摩擦", "热传导", "温度场", "导热", "稳态传热", "瞬态传热",
-        "屈曲", "失稳", "临界载荷", "螺栓", "预紧", "弹簧单元", "阻尼器",
-        "刚体约束", "耦合约束", "多点约束", "MPC", "内聚力", "分层", "脱粘",
-        "子模型", "连接器", "热膨胀", "热力耦合", "热应力",
-        "cohesive", "contact", "buckling", "heat transfer",
-    }
 
     def __init__(self, api_key=None, model="kimi-k2.5"):
         self.llm = LLMClient(api_key=api_key, model=model)
@@ -185,6 +271,14 @@ class AbaqusAgent:
         except Exception as e:
             logger.warning("RAG initialization failed: %s", e)
 
+        # Initialize embedding-based task router (reuses RAG's embedding model)
+        self.router = None
+        if self.rag is not None:
+            try:
+                self.router = TaskRouter(embedding_fn=self.rag._ef)
+            except Exception as e:
+                logger.warning("TaskRouter initialization failed: %s", e)
+
         # Initialize agent harness for complex tasks
         self.harness = None
         try:
@@ -197,11 +291,22 @@ class AbaqusAgent:
     def _is_complex_task(self, user_input):
         """Detect whether the task requires native Abaqus API (agent mode).
 
-        Returns True if the input contains keywords not covered by
-        the simplified API.
+        Uses embedding similarity when available, falls back to keyword matching.
         """
+        # Embedding-based routing (semantic understanding)
+        if self.router:
+            return self.router.is_complex(user_input)
+
+        # Fallback: keyword matching
+        _native_kw = {
+            "接触", "摩擦", "热传导", "温度场", "导热", "稳态传热", "瞬态传热",
+            "屈曲", "失稳", "临界载荷", "螺栓", "预紧", "弹簧单元", "阻尼器",
+            "刚体约束", "耦合约束", "多点约束", "内聚力", "分层", "脱粘",
+            "子模型", "连接器", "热膨胀", "热力耦合", "热应力",
+            "cohesive", "contact", "buckling", "heat transfer",
+        }
         lower = user_input.lower()
-        return any(kw in lower for kw in self._NATIVE_KEYWORDS)
+        return any(kw in lower for kw in _native_kw)
 
     def chat(self, user_message):
         """Route user message to pipeline or agent mode.
