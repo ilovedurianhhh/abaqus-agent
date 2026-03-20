@@ -15,7 +15,7 @@ if _project_root not in sys.path:
 
 from .llm import LLMClient
 from .history import ConversationHistory
-from .prompts import build_system_prompt
+from .prompts import build_system_prompt, build_agent_system_prompt
 from .code_validator import validate_api_calls
 
 logger = logging.getLogger(__name__)
@@ -157,6 +157,15 @@ def _format_result(plan, odb_summary, output_dir):
 class AbaqusAgent:
     """Agent that takes natural language input and runs Abaqus analyses."""
 
+    # Keywords that indicate the task needs native Abaqus API (not covered by simplified API)
+    _NATIVE_KEYWORDS = {
+        "接触", "摩擦", "热传导", "温度场", "导热", "稳态传热", "瞬态传热",
+        "屈曲", "失稳", "临界载荷", "螺栓", "预紧", "弹簧单元", "阻尼器",
+        "刚体约束", "耦合约束", "多点约束", "MPC", "内聚力", "分层", "脱粘",
+        "子模型", "连接器", "热膨胀", "热力耦合", "热应力",
+        "cohesive", "contact", "buckling", "heat transfer",
+    }
+
     def __init__(self, api_key=None, model="kimi-k2.5"):
         self.llm = LLMClient(api_key=api_key, model=model)
         self.history = ConversationHistory()
@@ -176,8 +185,70 @@ class AbaqusAgent:
         except Exception as e:
             logger.warning("RAG initialization failed: %s", e)
 
+        # Initialize agent harness for complex tasks
+        self.harness = None
+        try:
+            from .harness import AgentHarness
+            self.harness = AgentHarness(llm=self.llm, rag=self.rag)
+            logger.info("Agent harness initialized")
+        except Exception as e:
+            logger.warning("Harness initialization failed: %s", e)
+
+    def _is_complex_task(self, user_input):
+        """Detect whether the task requires native Abaqus API (agent mode).
+
+        Returns True if the input contains keywords not covered by
+        the simplified API.
+        """
+        lower = user_input.lower()
+        return any(kw in lower for kw in self._NATIVE_KEYWORDS)
+
     def chat(self, user_message):
-        """Process a user message and return the analysis result or response.
+        """Route user message to pipeline or agent mode.
+
+        Simple tasks (covered by simplified API) → pipeline (_pipeline_chat)
+        Complex tasks (need native Abaqus API) → agent loop (_agent_chat)
+        """
+        logger.info("User input: %s", user_message[:100])
+
+        if self.harness and self._is_complex_task(user_message):
+            logger.info("Routing to AGENT mode (complex task detected)")
+            return self._agent_chat(user_message)
+        else:
+            logger.info("Routing to PIPELINE mode")
+            return self._pipeline_chat(user_message)
+
+    def _agent_chat(self, user_message):
+        """Handle complex tasks via the agent harness (tool-use loop)."""
+        self.history.add_user(user_message)
+
+        system_prompt = build_agent_system_prompt()
+
+        response = self.harness.run(user_message, system_prompt)
+        self.history.add_assistant(response)
+
+        # Try to extract and validate code from the response
+        plan, code = _parse_response(response)
+        if code:
+            # Run through the same validation + execution pipeline
+            try:
+                _validate_code(code)
+            except CodeValidationError as e:
+                return response  # Return the raw response, user can see the code
+
+            api_errors = validate_api_calls(code)
+            if not api_errors:
+                ok, result_or_error = self._execute_code(code)
+                if ok:
+                    odb_summary = result_or_error.get("odb_summary")
+                    output_dir = result_or_error.get("output_dir", "")
+                    return _format_result(plan, odb_summary, output_dir)
+
+        # Return the raw LLM response (may contain <plan>+<code> for user to review)
+        return response
+
+    def _pipeline_chat(self, user_message):
+        """Handle simple tasks via the original pipeline (single-shot generation).
 
         Flow:
             1. Send message + history to LLM → get <plan> + <code>
@@ -186,7 +257,6 @@ class AbaqusAgent:
             4. On failure, append error to history and retry (up to 3 times)
             5. On success, format and return results
         """
-        logger.info("User input: %s", user_message[:100])
         self.history.add_user(user_message)
 
         last_error = None

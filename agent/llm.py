@@ -57,3 +57,37 @@ class LLMClient:
             logger.info("LLM response: prompt_tokens=%d, completion_tokens=%d, total=%d",
                          usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
         return reply
+
+    def generate_with_tools(self, system, messages, tools, max_tokens=4096):
+        """Chat completion with tool calling support.
+
+        Args:
+            system: System prompt string.
+            messages: List of message dicts (may include tool results).
+            tools: List of tool definitions in OpenAI format.
+            max_tokens: Maximum tokens in the response.
+
+        Returns:
+            The full response Message object (may contain tool_calls).
+        """
+        full_messages = [{"role": "system", "content": system}] + messages
+
+        logger.info("LLM tool request: model=%s, messages=%d, tools=%d",
+                     self.model, len(full_messages), len(tools))
+
+        kwargs = dict(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=full_messages,
+            tools=tools,
+        )
+
+        response = self._client.chat.completions.create(**kwargs)
+
+        msg = response.choices[0].message
+        usage = response.usage
+        if usage:
+            logger.info("LLM tool response: prompt=%d, completion=%d, tool_calls=%s",
+                         usage.prompt_tokens, usage.completion_tokens,
+                         len(msg.tool_calls) if msg.tool_calls else 0)
+        return msg
